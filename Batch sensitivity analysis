@@ -28,20 +28,20 @@ rds_file <- file.path(
 tool_files <- c(
   Tool1 = file.path(
     base_dir,
-    "TOOL1_FOLDER_NAME",
-    "TOOL1_CLUSTER_FILE.csv"
+    "downstream_outputs_(3)",
+    "monocle3_clusters_(3).csv"
   ),
   
   Tool2 = file.path(
     base_dir,
-    "TOOL2_FOLDER_NAME",
-    "TOOL2_CLUSTER_FILE.csv"
+    "downstream_outputs_(3)",
+    "scran_scater_clusters_(3).csv"
   ),
   
   Tool3 = file.path(
     base_dir,
-    "TOOL3_FOLDER_NAME",
-    "TOOL3_CLUSTER_FILE.csv"
+    "downstream_outputs_(3)",
+    "seurat_clusters_(3).csv"
   )
 )
 

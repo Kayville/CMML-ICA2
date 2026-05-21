@@ -1,0 +1,182 @@
+truth_df <- data.frame(
+  cell = if ("cell" %in% colnames(meta)) as.character(meta$cell) else as.character(rownames(meta)),
+  author_cell_type = as.character(meta$author_cell_type),
+  condition = as.character(meta$condition),
+  batch = as.character(meta$batch),
+  stringsAsFactors = FALSE
+)
+
+head(truth_df)
+
+#每个真实 cell type 内部，cluster vs condition 的交叉表；
+#每个真实 cell type 内部，cluster vs batch 的交叉表；
+#cluster 和 condition 的 ARI；
+#cluster 和 batch 的 ARI；
+#卡方检验 p value；
+#Cramér's V，表示关联强度。
+library(mclust)
+
+cramers_v <- function(tab) {
+  chi <- suppressWarnings(chisq.test(tab))
+  n <- sum(tab)
+  r <- nrow(tab)
+  k <- ncol(tab)
+  v <- sqrt(as.numeric(chi$statistic) / (n * min(r - 1, k - 1)))
+  return(v)
+}
+
+analyze_cluster_drivers <- function(cluster_file, truth_df, tool_name = "Tool") {
+  
+  cluster_df <- read.csv(
+    cluster_file,
+    stringsAsFactors = FALSE,
+    check.names = FALSE
+  )
+  
+  cluster_df <- cluster_df[, c("cell", "cluster")]
+  cluster_df$cell <- as.character(cluster_df$cell)
+  cluster_df$cluster <- as.character(cluster_df$cluster)
+  
+  cluster_df <- cluster_df[!duplicated(cluster_df$cell), ]
+  
+  merged_df <- merge(
+    truth_df,
+    cluster_df,
+    by = "cell",
+    all = FALSE
+  )
+  
+  merged_df <- merged_df[
+    !is.na(merged_df$author_cell_type) &
+      !is.na(merged_df$cluster) &
+      !is.na(merged_df$condition) &
+      !is.na(merged_df$batch) &
+      merged_df$author_cell_type != "" &
+      merged_df$cluster != "" &
+      merged_df$condition != "" &
+      merged_df$batch != "",
+  ]
+  
+  celltypes <- unique(merged_df$author_cell_type)
+  
+  result_list <- list()
+  
+  for (ct in celltypes) {
+    
+    sub_df <- merged_df[merged_df$author_cell_type == ct, ]
+    
+    tab_condition <- table(
+      cluster = sub_df$cluster,
+      condition = sub_df$condition
+    )
+    
+    tab_batch <- table(
+      cluster = sub_df$cluster,
+      batch = sub_df$batch
+    )
+    
+    ari_condition <- adjustedRandIndex(
+      as.factor(sub_df$cluster),
+      as.factor(sub_df$condition)
+    )
+    
+    ari_batch <- adjustedRandIndex(
+      as.factor(sub_df$cluster),
+      as.factor(sub_df$batch)
+    )
+    
+    chisq_condition <- suppressWarnings(chisq.test(tab_condition))
+    chisq_batch <- suppressWarnings(chisq.test(tab_batch))
+    
+    cv_condition <- cramers_v(tab_condition)
+    cv_batch <- cramers_v(tab_batch)
+    
+    result_list[[ct]] <- list(
+      tool = tool_name,
+      cell_type = ct,
+      n_cells = nrow(sub_df),
+      cluster_vs_condition_table = tab_condition,
+      cluster_vs_batch_table = tab_batch,
+      ARI_cluster_condition = ari_condition,
+      ARI_cluster_batch = ari_batch,
+      chisq_p_condition = chisq_condition$p.value,
+      chisq_p_batch = chisq_batch$p.value,
+      cramers_v_condition = cv_condition,
+      cramers_v_batch = cv_batch
+    )
+  }
+  
+  return(result_list)
+}
+
+driver_results <- lapply(names(tool_files), function(tool_name) {
+  analyze_cluster_drivers(
+    cluster_file = tool_files[[tool_name]],
+    truth_df = truth_df,
+    tool_name = tool_name
+  )
+})
+
+names(driver_results) <- names(tool_files)
+
+for (tool_name in names(driver_results)) {
+  
+  cat("\n============================\n")
+  cat("Tool:", tool_name, "\n")
+  cat("============================\n")
+  
+  for (cell_type_name in names(driver_results[[tool_name]])) {
+    
+    cat("\n----------------------------\n")
+    cat("Cell type:", cell_type_name, "\n")
+    cat("----------------------------\n")
+    
+    tab_condition <- driver_results[[tool_name]][[cell_type_name]]$cluster_vs_condition_table
+    tab_batch <- driver_results[[tool_name]][[cell_type_name]]$cluster_vs_batch_table
+    
+    cat("\nCluster vs condition counts:\n")
+    print(tab_condition)
+    
+    cat("\nCluster vs condition row proportions:\n")
+    print(round(prop.table(tab_condition, margin = 1), 3))
+    
+    cat("\nCluster vs batch counts:\n")
+    print(tab_batch)
+    
+    cat("\nCluster vs batch row proportions:\n")
+    print(round(prop.table(tab_batch, margin = 1), 3))
+  }
+}
+
+#保存成txt
+sink(file.path(base_dir, paste0("console_output_", format(Sys.time(), "%Y%m%d_%H%M%S"), ".txt")))
+
+for (tool_name in names(driver_results)) {
+  
+  cat("\n============================\n")
+  cat("Tool:", tool_name, "\n")
+  cat("============================\n")
+  
+  for (cell_type_name in names(driver_results[[tool_name]])) {
+    
+    cat("\n----------------------------\n")
+    cat("Cell type:", cell_type_name, "\n")
+    cat("----------------------------\n")
+    
+    x <- driver_results[[tool_name]][[cell_type_name]]
+    
+    cat("\nCluster vs condition counts:\n")
+    print(x$cluster_vs_condition_table)
+    
+    cat("\nCluster vs condition row proportions:\n")
+    print(round(prop.table(x$cluster_vs_condition_table, margin = 1), 3))
+    
+    cat("\nCluster vs batch counts:\n")
+    print(x$cluster_vs_batch_table)
+    
+    cat("\nCluster vs batch row proportions:\n")
+    print(round(prop.table(x$cluster_vs_batch_table, margin = 1), 3))
+  }
+}
+
+sink()

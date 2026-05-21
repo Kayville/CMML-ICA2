@@ -1,0 +1,753 @@
+############################################################
+## scDesign3 simulation downstream workflows
+## Seurat + scran/scater + Monocle3
+##
+## Input RDS structure:
+##   obj$new_count
+##   obj$new_covariate
+##
+## Current simulation label: (1)
+############################################################
+
+
+############################
+## 0. User settings
+############################
+
+sim_label <- "(1)"
+
+base_dir <- "D:/OneDrive/Desktop/CMML ICA2/scDesign3_simulation_outputs"
+
+file_count_covariate <- file.path(
+  base_dir,
+  "Dataset1_balanced_celltype_condition_rep1_new_count_new_covariate.rds"
+)
+
+file_full <- file.path(
+  base_dir,
+  "Dataset1_balanced_celltype_condition_rep1_full_my_simu.rds"
+)
+
+outdir <- file.path(
+  base_dir,
+  paste0("downstream_outputs_", sim_label)
+)
+
+dir.create(outdir, showWarnings = FALSE, recursive = TRUE)
+
+set.seed(123)
+
+## 如果 Monocle3 还没有装好，可以先设为 FALSE
+run_monocle3 <- TRUE
+
+
+############################
+## 1. Load packages
+############################
+
+required_packages <- c(
+  "Matrix",
+  "Seurat",
+  "SingleCellExperiment",
+  "scater",
+  "scran",
+  "scuttle",
+  "bluster",
+  "igraph"
+)
+
+if (run_monocle3) {
+  required_packages <- c(required_packages, "monocle3")
+}
+
+missing_packages <- required_packages[
+  !vapply(required_packages, requireNamespace, logical(1), quietly = TRUE)
+]
+
+if (length(missing_packages) > 0) {
+  stop(
+    "These packages are missing:\n",
+    paste(missing_packages, collapse = ", "),
+    "\nPlease install them first, then rerun this script."
+  )
+}
+
+library(Matrix)
+library(Seurat)
+library(SingleCellExperiment)
+library(scater)
+library(scran)
+library(scuttle)
+library(bluster)
+library(igraph)
+
+if (run_monocle3) {
+  library(monocle3)
+}
+
+
+############################
+## 2. Helper functions
+############################
+
+standardize_counts <- function(counts) {
+  if (is.data.frame(counts)) {
+    counts <- as.matrix(counts)
+  }
+
+  if (!inherits(counts, "dgCMatrix")) {
+    counts <- Matrix::Matrix(as.matrix(counts), sparse = TRUE)
+  }
+
+  if (is.null(rownames(counts))) {
+    rownames(counts) <- paste0("gene_", seq_len(nrow(counts)))
+  }
+
+  if (is.null(colnames(counts))) {
+    colnames(counts) <- paste0("cell_", seq_len(ncol(counts)))
+  }
+
+  rownames(counts) <- make.unique(as.character(rownames(counts)))
+  colnames(counts) <- make.unique(as.character(colnames(counts)))
+
+  counts
+}
+
+
+align_covariate_to_cells <- function(cov, cell_names) {
+  cov <- as.data.frame(cov)
+
+  if (!is.null(rownames(cov)) && all(cell_names %in% rownames(cov))) {
+    cov <- cov[cell_names, , drop = FALSE]
+    return(cov)
+  }
+
+  possible_cell_cols <- c(
+    "cell",
+    "cell_id",
+    "cellID",
+    "barcode",
+    "Cell",
+    "CellID",
+    "cell_name",
+    "cell_names"
+  )
+
+  matched_col <- possible_cell_cols[possible_cell_cols %in% colnames(cov)]
+
+  if (length(matched_col) > 0) {
+    cell_col <- matched_col[1]
+    rownames(cov) <- as.character(cov[[cell_col]])
+
+    if (all(cell_names %in% rownames(cov))) {
+      cov <- cov[cell_names, , drop = FALSE]
+      return(cov)
+    }
+  }
+
+  if (nrow(cov) == length(cell_names)) {
+    rownames(cov) <- cell_names
+    return(cov)
+  }
+
+  stop(
+    "Could not align new_covariate to count matrix columns. ",
+    "Please check whether rows of new_covariate correspond to cells."
+  )
+}
+
+
+make_safe_metadata <- function(meta) {
+  meta <- as.data.frame(meta)
+
+  for (nm in colnames(meta)) {
+    if (is.matrix(meta[[nm]]) || is.list(meta[[nm]])) {
+      meta[[nm]] <- as.character(meta[[nm]])
+    }
+  }
+
+  meta
+}
+
+
+save_session_info <- function(outdir, sim_label) {
+  sink(file.path(outdir, paste0("sessionInfo_", sim_label, ".txt")))
+  print(sessionInfo())
+  sink()
+}
+
+
+safe_write_csv <- function(x, filename) {
+  write.csv(x, filename, row.names = FALSE)
+}
+
+
+############################
+## 3. Read RDS files
+############################
+
+if (!file.exists(file_count_covariate)) {
+  stop("Cannot find file_count_covariate: ", file_count_covariate)
+}
+
+obj_count_covariate <- readRDS(file_count_covariate)
+
+if (!all(c("new_count", "new_covariate") %in% names(obj_count_covariate))) {
+  stop(
+    "The RDS file must contain both 'new_count' and 'new_covariate'.\n",
+    "Detected names are:\n",
+    paste(names(obj_count_covariate), collapse = ", ")
+  )
+}
+
+cat("Loaded count/covariate RDS file.\n")
+cat("Object names:\n")
+print(names(obj_count_covariate))
+
+
+############################
+## 4. Extract counts and metadata
+############################
+
+sim_counts <- obj_count_covariate$new_count
+cell_metadata <- obj_count_covariate$new_covariate
+
+sim_counts <- standardize_counts(sim_counts)
+cell_metadata <- make_safe_metadata(cell_metadata)
+cell_metadata <- align_covariate_to_cells(
+  cell_metadata,
+  colnames(sim_counts)
+)
+
+stopifnot(ncol(sim_counts) == nrow(cell_metadata))
+stopifnot(all(colnames(sim_counts) == rownames(cell_metadata)))
+
+cat("\nCount matrix dimension:\n")
+print(dim(sim_counts))
+
+cat("\nMetadata dimension:\n")
+print(dim(cell_metadata))
+
+cat("\nMetadata columns:\n")
+print(colnames(cell_metadata))
+
+safe_write_csv(
+  data.frame(
+    gene = rownames(sim_counts),
+    simulation = sim_label
+  ),
+  file.path(outdir, paste0("input_genes_", sim_label, ".csv"))
+)
+
+safe_write_csv(
+  data.frame(
+    cell = colnames(sim_counts),
+    simulation = sim_label
+  ),
+  file.path(outdir, paste0("input_cells_", sim_label, ".csv"))
+)
+
+safe_write_csv(
+  data.frame(
+    cell = rownames(cell_metadata),
+    cell_metadata,
+    simulation = sim_label,
+    check.names = FALSE
+  ),
+  file.path(outdir, paste0("input_cell_metadata_", sim_label, ".csv"))
+)
+
+
+############################################################
+## 5. Seurat workflow
+############################################################
+
+cat("\n==============================\n")
+cat("Running Seurat workflow...\n")
+cat("==============================\n")
+
+seu <- CreateSeuratObject(
+  counts = sim_counts,
+  meta.data = cell_metadata,
+  project = paste0("scDesign3_simulation_", sim_label)
+)
+
+seu <- NormalizeData(seu)
+
+seu <- FindVariableFeatures(
+  seu,
+  selection.method = "vst",
+  nfeatures = min(2000, nrow(seu))
+)
+
+seu <- ScaleData(seu)
+
+n_pcs_seurat <- min(
+  30,
+  ncol(seu) - 1,
+  length(VariableFeatures(seu))
+)
+
+if (n_pcs_seurat < 2) {
+  stop("Too few cells or variable genes for Seurat PCA.")
+}
+
+seu <- RunPCA(
+  seu,
+  features = VariableFeatures(seu),
+  npcs = n_pcs_seurat
+)
+
+dims_use_seurat <- 1:min(20, n_pcs_seurat)
+
+seu <- FindNeighbors(seu, dims = dims_use_seurat)
+
+seu <- FindClusters(
+  seu,
+  resolution = 0.5
+)
+
+seu <- RunUMAP(
+  seu,
+  dims = dims_use_seurat
+)
+
+seurat_clusters <- data.frame(
+  cell = colnames(seu),
+  cluster = as.character(Idents(seu)),
+  simulation = sim_label,
+  stringsAsFactors = FALSE
+)
+
+seurat_umap <- as.data.frame(Embeddings(seu, reduction = "umap"))
+seurat_umap$cell <- rownames(seurat_umap)
+seurat_umap$simulation <- sim_label
+
+## 统一列名
+if (all(c("umap_1", "umap_2") %in% colnames(seurat_umap))) {
+  seurat_umap_out <- data.frame(
+    cell = seurat_umap$cell,
+    UMAP_1 = seurat_umap$umap_1,
+    UMAP_2 = seurat_umap$umap_2,
+    simulation = seurat_umap$simulation
+  )
+} else {
+  seurat_umap_out <- seurat_umap
+  colnames(seurat_umap_out)[1:2] <- c("UMAP_1", "UMAP_2")
+}
+
+seurat_markers <- FindAllMarkers(
+  seu,
+  only.pos = TRUE,
+  min.pct = 0.25,
+  logfc.threshold = 0.25
+)
+
+seurat_markers$simulation <- sim_label
+
+safe_write_csv(
+  seurat_clusters,
+  file.path(outdir, paste0("seurat_clusters_", sim_label, ".csv"))
+)
+
+safe_write_csv(
+  seurat_umap_out,
+  file.path(outdir, paste0("seurat_umap_", sim_label, ".csv"))
+)
+
+safe_write_csv(
+  seurat_markers,
+  file.path(outdir, paste0("seurat_markers_", sim_label, ".csv"))
+)
+
+saveRDS(
+  seu,
+  file.path(outdir, paste0("seurat_object_", sim_label, ".rds"))
+)
+
+cat("Seurat workflow finished.\n")
+
+
+############################################################
+## 6. scran / scater Bioconductor workflow
+############################################################
+
+cat("\n==============================\n")
+cat("Running scran/scater workflow...\n")
+cat("==============================\n")
+
+## 重新创建 sce，避免之前被覆盖成 factor
+sce <- SingleCellExperiment(
+  assays = list(counts = sim_counts),
+  colData = cell_metadata
+)
+
+sce <- addPerCellQC(sce)
+sce <- logNormCounts(sce)
+
+dec <- modelGeneVar(sce)
+
+n_hvg <- min(2000, nrow(sce))
+hvg <- getTopHVGs(dec, n = n_hvg)
+
+n_pcs_scran <- min(
+  30,
+  ncol(sce) - 1,
+  length(hvg)
+)
+
+if (n_pcs_scran < 2) {
+  stop("Too few cells or HVGs for scran/scater PCA.")
+}
+
+sce <- runPCA(
+  sce,
+  subset_row = hvg,
+  ncomponents = n_pcs_scran
+)
+
+dims_use_scran <- 1:min(20, n_pcs_scran)
+
+## 重点：clusterCells 的结果单独保存，不能覆盖 sce
+scran_cluster_labels <- clusterCells(
+  sce,
+  use.dimred = "PCA",
+  BLUSPARAM = NNGraphParam(
+    k = 10,
+    cluster.fun = "louvain"
+  )
+)
+
+sce$cluster <- as.factor(scran_cluster_labels)
+
+sce <- runUMAP(
+  sce,
+  dimred = "PCA",
+  n_dimred = length(dims_use_scran)
+)
+
+scran_markers_list <- findMarkers(
+  sce,
+  groups = sce$cluster,
+  direction = "up"
+)
+
+scran_markers_list <- findMarkers(
+  sce,
+  groups = sce$cluster,
+  direction = "up"
+)
+
+scran_marker_list_df <- lapply(names(scran_markers_list), function(cl) {
+  x <- as.data.frame(scran_markers_list[[cl]])
+  x$gene <- rownames(x)
+  x$cluster <- cl
+  x$simulation <- sim_label
+  x
+})
+
+all_marker_cols <- unique(unlist(lapply(scran_marker_list_df, colnames)))
+
+scran_marker_list_df <- lapply(scran_marker_list_df, function(x) {
+  missing_cols <- setdiff(all_marker_cols, colnames(x))
+
+  if (length(missing_cols) > 0) {
+    for (mc in missing_cols) {
+      x[[mc]] <- NA
+    }
+  }
+
+  x <- x[, all_marker_cols, drop = FALSE]
+  x
+})
+
+scran_marker_df <- do.call(rbind, scran_marker_list_df)
+rownames(scran_marker_df) <- NULL
+
+scran_clusters <- data.frame(
+  cell = colnames(sce),
+  cluster = as.character(sce$cluster),
+  simulation = sim_label,
+  stringsAsFactors = FALSE
+)
+
+scran_umap <- as.data.frame(reducedDim(sce, "UMAP"))
+colnames(scran_umap)[1:2] <- c("UMAP_1", "UMAP_2")
+scran_umap$cell <- rownames(scran_umap)
+scran_umap$simulation <- sim_label
+
+scran_umap_out <- data.frame(
+  cell = scran_umap$cell,
+  UMAP_1 = scran_umap$UMAP_1,
+  UMAP_2 = scran_umap$UMAP_2,
+  simulation = scran_umap$simulation,
+  stringsAsFactors = FALSE
+)
+
+safe_write_csv(
+  scran_clusters,
+  file.path(outdir, paste0("scran_scater_clusters_", sim_label, ".csv"))
+)
+
+safe_write_csv(
+  scran_umap_out,
+  file.path(outdir, paste0("scran_scater_umap_", sim_label, ".csv"))
+)
+
+safe_write_csv(
+  scran_marker_df,
+  file.path(outdir, paste0("scran_scater_markers_", sim_label, ".csv"))
+)
+
+saveRDS(
+  sce,
+  file.path(outdir, paste0("scran_scater_sce_", sim_label, ".rds"))
+)
+
+saveRDS(
+  scran_markers_list,
+  file.path(outdir, paste0("scran_scater_markers_list_", sim_label, ".rds"))
+)
+
+cat("scran/scater workflow finished.\n")
+
+############################################################
+## 7. Monocle3 workflow
+############################################################
+
+if (run_monocle3) {
+
+  cat("\n==============================\n")
+  cat("Running Monocle3 workflow...\n")
+  cat("==============================\n")
+
+  gene_metadata <- data.frame(
+    gene_short_name = rownames(sim_counts),
+    row.names = rownames(sim_counts),
+    stringsAsFactors = FALSE
+  )
+
+  monocle_cell_metadata <- cell_metadata
+  monocle_cell_metadata$cell <- rownames(monocle_cell_metadata)
+
+  cds <- new_cell_data_set(
+    expression_data = sim_counts,
+    cell_metadata = monocle_cell_metadata,
+    gene_metadata = gene_metadata
+  )
+
+  n_dim_monocle <- min(
+    30,
+    ncol(cds) - 1,
+    nrow(cds)
+  )
+
+  if (n_dim_monocle < 2) {
+    stop("Too few cells or genes for Monocle3 preprocessing.")
+  }
+
+  cds <- preprocess_cds(
+    cds,
+    num_dim = n_dim_monocle,
+    method = "PCA"
+  )
+
+  cds <- reduce_dimension(
+    cds,
+    reduction_method = "UMAP"
+  )
+
+  cds <- cluster_cells(
+    cds,
+    reduction_method = "UMAP"
+  )
+
+  monocle_clusters <- data.frame(
+    cell = colnames(cds),
+    cluster = as.character(clusters(cds)),
+    simulation = sim_label,
+    stringsAsFactors = FALSE
+  )
+
+  monocle_umap <- as.data.frame(reducedDims(cds)$UMAP)
+  colnames(monocle_umap)[1:2] <- c("UMAP_1", "UMAP_2")
+  monocle_umap$cell <- rownames(monocle_umap)
+  monocle_umap$simulation <- sim_label
+
+  monocle_umap_out <- data.frame(
+    cell = monocle_umap$cell,
+    UMAP_1 = monocle_umap$UMAP_1,
+    UMAP_2 = monocle_umap$UMAP_2,
+    simulation = monocle_umap$simulation,
+    stringsAsFactors = FALSE
+  )
+
+  monocle_markers <- top_markers(
+    cds,
+    group_cells_by = "cluster",
+    reference_cells = min(1000, ncol(cds)),
+    cores = 1
+  )
+
+  monocle_markers$simulation <- sim_label
+
+  safe_write_csv(
+    monocle_clusters,
+    file.path(outdir, paste0("monocle3_clusters_", sim_label, ".csv"))
+  )
+
+  safe_write_csv(
+    monocle_umap_out,
+    file.path(outdir, paste0("monocle3_umap_", sim_label, ".csv"))
+  )
+
+  safe_write_csv(
+    monocle_markers,
+    file.path(outdir, paste0("monocle3_markers_", sim_label, ".csv"))
+  )
+
+  saveRDS(
+    cds,
+    file.path(outdir, paste0("monocle3_cds_", sim_label, ".rds"))
+  )
+
+  cat("Monocle3 workflow finished.\n")
+
+} else {
+
+  cat("\nMonocle3 workflow skipped because run_monocle3 <- FALSE.\n")
+
+  monocle_clusters <- NULL
+  monocle_umap_out <- NULL
+  monocle_markers <- NULL
+}
+
+
+############################################################
+## 8. Combined outputs
+############################################################
+
+cat("\n==============================\n")
+cat("Writing combined outputs...\n")
+cat("==============================\n")
+
+all_clusters <- rbind(
+  data.frame(
+    method = "Seurat",
+    seurat_clusters,
+    stringsAsFactors = FALSE
+  ),
+  data.frame(
+    method = "scran_scater",
+    scran_clusters,
+    stringsAsFactors = FALSE
+  )
+)
+
+all_umap <- rbind(
+  data.frame(
+    method = "Seurat",
+    seurat_umap_out,
+    stringsAsFactors = FALSE
+  ),
+  data.frame(
+    method = "scran_scater",
+    scran_umap_out,
+    stringsAsFactors = FALSE
+  )
+)
+
+if (run_monocle3) {
+  all_clusters <- rbind(
+    all_clusters,
+    data.frame(
+      method = "Monocle3",
+      monocle_clusters,
+      stringsAsFactors = FALSE
+    )
+  )
+
+  all_umap <- rbind(
+    all_umap,
+    data.frame(
+      method = "Monocle3",
+      monocle_umap_out,
+      stringsAsFactors = FALSE
+    )
+  )
+}
+
+safe_write_csv(
+  all_clusters,
+  file.path(outdir, paste0("all_methods_clusters_", sim_label, ".csv"))
+)
+
+safe_write_csv(
+  all_umap,
+  file.path(outdir, paste0("all_methods_umap_", sim_label, ".csv"))
+)
+
+
+############################################################
+## 9. Save marker summary
+############################################################
+
+cat("\n==============================\n")
+cat("Writing marker summaries...\n")
+cat("==============================\n")
+
+seurat_top20 <- seurat_markers |>
+  split(seurat_markers$cluster) |>
+  lapply(function(x) {
+    x <- x[order(x$p_val_adj, -abs(x$avg_log2FC)), , drop = FALSE]
+    head(x, 20)
+  }) |>
+  do.call(rbind, args = _)
+
+scran_top20 <- scran_marker_df |>
+  split(scran_marker_df$cluster) |>
+  lapply(function(x) {
+    if ("FDR" %in% colnames(x)) {
+      x <- x[order(x$FDR), , drop = FALSE]
+    }
+    head(x, 20)
+  }) |>
+  do.call(rbind, args = _)
+
+safe_write_csv(
+  seurat_top20,
+  file.path(outdir, paste0("seurat_top20_markers_by_cluster_", sim_label, ".csv"))
+)
+
+safe_write_csv(
+  scran_top20,
+  file.path(outdir, paste0("scran_scater_top20_markers_by_cluster_", sim_label, ".csv"))
+)
+
+if (run_monocle3) {
+  monocle_top20 <- monocle_markers |>
+    split(monocle_markers$cell_group) |>
+    lapply(function(x) {
+      if ("marker_test_p_value" %in% colnames(x)) {
+        x <- x[order(x$marker_test_p_value), , drop = FALSE]
+      }
+      head(x, 20)
+    }) |>
+    do.call(rbind, args = _)
+
+  safe_write_csv(
+    monocle_top20,
+    file.path(outdir, paste0("monocle3_top20_markers_by_cluster_", sim_label, ".csv"))
+  )
+}
+
+
+############################################################
+## 10. Save session info
+############################################################
+
+save_session_info(outdir, sim_label)
+
+cat("\nAll workflows completed successfully.\n")
+cat("Output directory:\n")
+cat(outdir, "\n")

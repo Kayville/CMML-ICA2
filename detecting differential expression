@@ -1,0 +1,593 @@
+############################################################
+## DE marker evaluation for multiple tools
+## Precision / Recall / F1
+##
+## This version:
+##   - Uses simulated gene IDs directly, e.g. gene_2278
+##   - Does NOT use gene symbol / ENSG mapping
+##   - Supports different CSV headers for each tool
+##   - Outputs per-celltype scores and overall tool ranking
+############################################################
+
+
+############################
+## 0. USER INPUT SECTION
+############################
+
+base_dir <- "D:/OneDrive/Desktop/CMML ICA2/scDesign3_simulation_outputs/downstream_outputs_(1)"
+
+target_celltypes <- c("dExN", "RG", "InhN")
+
+padj_threshold <- 0.05
+
+## "padj" : predicted genes = q/p adjusted value < threshold
+## "topN" : predicted genes = top N genes, N = number of ground truth genes
+## "both" : run both
+evaluation_mode <- "both"
+
+
+############################
+## 0.1 Ground truth markers
+############################
+
+## Directly use simulated gene IDs
+ground_truth_markers <- list(
+  dExN = c(
+    "gene_2278",
+    "gene_829",
+    "gene_10607",
+    "gene_8745"
+  ),
+
+  RG = c(
+    "gene_8811",
+    "gene_11144",
+    "gene_9895",
+    "gene_5034"
+  ),
+
+  InhN = c(
+    "gene_10173",
+    "gene_19550",
+    "gene_5533",
+    "gene_7"
+  )
+)
+
+
+############################
+## 0.2 Tool-specific settings
+############################
+
+tool_configs <- list(
+
+  Monocle3 = list(
+    file = file.path(base_dir, "monocle3_markers_(1).csv"),
+
+    ## Screenshot columns:
+    ## gene_id, cell_group, marker_test_q_value, marker_score
+    gene_col = "gene_id",
+    cluster_col = "cell_group",
+
+    padj_col = "marker_test_q_value",
+    score_col = "marker_score",
+
+    cluster_map = data.frame(
+      tool_cluster = c("1", "3", "2", "4", "5", "6"),
+      truth_celltype = c("dExN", "dExN", "RG", "RG", "InhN", "InhN"),
+      stringsAsFactors = FALSE
+    )
+  ),
+
+  ScranScater = list(
+    file = file.path(base_dir, "scran_scater_markers_(1).csv"),
+
+    ## Screenshot columns:
+    ## gene, cluster, FDR, summary.logFC
+    gene_col = "gene",
+    cluster_col = "cluster",
+
+    padj_col = "FDR",
+    score_col = "summary.logFC",
+
+    cluster_map = data.frame(
+      tool_cluster = c("1", "4", "2", "5", "3", "6"),
+      truth_celltype = c("dExN", "dExN", "RG", "RG", "InhN", "InhN"),
+      stringsAsFactors = FALSE
+    )
+  ),
+
+  Seurat = list(
+    file = file.path(base_dir, "seurat_markers_(1).csv"),
+
+    ## Screenshot columns:
+    ## gene, cluster, p_val_adj, avg_log2FC
+    gene_col = "gene",
+    cluster_col = "cluster",
+
+    padj_col = "p_val_adj",
+    score_col = "avg_log2FC",
+
+    cluster_map = data.frame(
+      tool_cluster = c("0", "2", "1", "3", "4", "5"),
+      truth_celltype = c("dExN", "dExN", "RG", "RG", "InhN", "InhN"),
+      stringsAsFactors = FALSE
+    )
+  )
+)
+
+out_dir <- file.path(base_dir, "precision_recall_f1_outputs")
+dir.create(out_dir, showWarnings = FALSE, recursive = TRUE)
+
+
+############################
+## 1. PACKAGE SETUP
+############################
+
+required_pkgs <- c(
+  "readr",
+  "dplyr",
+  "tibble",
+  "tidyr",
+  "stringr"
+)
+
+for (pkg in required_pkgs) {
+  if (!requireNamespace(pkg, quietly = TRUE)) {
+    install.packages(pkg)
+  }
+}
+
+suppressPackageStartupMessages({
+  library(readr)
+  library(dplyr)
+  library(tibble)
+  library(tidyr)
+  library(stringr)
+})
+
+
+############################
+## 2. HELPER FUNCTIONS
+############################
+
+clean_gene <- function(x) {
+  x <- as.character(x)
+  x <- trimws(x)
+
+  ## Remove accidental version suffix like gene_123.1 or ENSG... .1
+  x <- gsub("\\.\\d+$", "", x)
+
+  ## Convert to lower case
+  x <- tolower(x)
+
+  ## Standardize simulated gene IDs:
+  ## gene-2278 -> gene_2278
+  ## gene.2278 -> gene_2278
+  x <- gsub("^gene[-\\.]", "gene_", x)
+
+  x
+}
+
+score_precision_recall_f1 <- function(predicted_genes, ground_truth_genes) {
+  pred <- unique(clean_gene(predicted_genes))
+  gt <- unique(clean_gene(ground_truth_genes))
+
+  pred <- pred[!is.na(pred) & pred != ""]
+  gt <- gt[!is.na(gt) & gt != ""]
+
+  tp <- length(intersect(pred, gt))
+  fp <- length(setdiff(pred, gt))
+  fn <- length(setdiff(gt, pred))
+
+  precision <- ifelse(tp + fp == 0, NA_real_, tp / (tp + fp))
+  recall <- ifelse(tp + fn == 0, NA_real_, tp / (tp + fn))
+
+  f1 <- ifelse(
+    is.na(precision) | is.na(recall) | precision + recall == 0,
+    NA_real_,
+    2 * precision * recall / (precision + recall)
+  )
+
+  tibble(
+    n_ground_truth = length(gt),
+    n_predicted = length(pred),
+    true_positive = tp,
+    false_positive = fp,
+    false_negative = fn,
+    precision = precision,
+    recall = recall,
+    f1 = f1
+  )
+}
+
+read_tool_csv <- function(file_path) {
+  if (!file.exists(file_path)) {
+    stop("File not found: ", file_path)
+  }
+
+  df <- readr::read_csv(file_path, show_col_types = FALSE)
+
+  if (nrow(df) == 0) {
+    stop("CSV file is empty: ", file_path)
+  }
+
+  df
+}
+
+check_required_columns <- function(df, cfg, tool_name) {
+  required_cols <- c(cfg$gene_col, cfg$cluster_col)
+
+  missing_required <- setdiff(required_cols, colnames(df))
+
+  if (length(missing_required) > 0) {
+    stop(
+      tool_name,
+      " missing required columns: ",
+      paste(missing_required, collapse = ", "),
+      "\nAvailable columns are:\n",
+      paste(colnames(df), collapse = ", ")
+    )
+  }
+
+  if (!(cfg$padj_col %in% colnames(df))) {
+    warning(
+      tool_name,
+      " does not have padj/FDR/q-value column: ",
+      cfg$padj_col,
+      ". padj mode will return no genes for this tool."
+    )
+  }
+
+  if (!(cfg$score_col %in% colnames(df))) {
+    warning(
+      tool_name,
+      " does not have score/logFC column: ",
+      cfg$score_col,
+      ". Ranking will use q-value only or original row order."
+    )
+  }
+}
+
+prepare_tool_table <- function(df, cfg) {
+  df2 <- df %>%
+    mutate(
+      gene_raw = as.character(.data[[cfg$gene_col]]),
+      gene_eval = clean_gene(gene_raw),
+      tool_cluster_eval = as.character(.data[[cfg$cluster_col]])
+    )
+
+  if (cfg$padj_col %in% colnames(df2)) {
+    df2 <- df2 %>%
+      mutate(padj_eval = suppressWarnings(as.numeric(.data[[cfg$padj_col]])))
+  } else {
+    df2 <- df2 %>%
+      mutate(padj_eval = NA_real_)
+  }
+
+  if (cfg$score_col %in% colnames(df2)) {
+    df2 <- df2 %>%
+      mutate(score_eval = suppressWarnings(as.numeric(.data[[cfg$score_col]])))
+  } else {
+    df2 <- df2 %>%
+      mutate(score_eval = NA_real_)
+  }
+
+  cluster_map <- cfg$cluster_map %>%
+    mutate(
+      tool_cluster = as.character(tool_cluster),
+      truth_celltype = as.character(truth_celltype)
+    )
+
+  df2 <- df2 %>%
+    left_join(
+      cluster_map,
+      by = c("tool_cluster_eval" = "tool_cluster")
+    )
+
+  df2
+}
+
+select_predicted_genes <- function(df_ct, mode, gt_n) {
+  if (nrow(df_ct) == 0) {
+    return(tibble())
+  }
+
+  if (mode == "padj") {
+
+    df_pred <- df_ct %>%
+      filter(
+        !is.na(padj_eval),
+        padj_eval < padj_threshold
+      ) %>%
+      arrange(
+        padj_eval,
+        desc(score_eval)
+      )
+
+  } else if (mode == "topN") {
+
+    df_pred <- df_ct %>%
+      arrange(
+        ifelse(is.na(padj_eval), Inf, padj_eval),
+        desc(score_eval)
+      ) %>%
+      slice_head(n = gt_n)
+
+  } else {
+    stop("Unknown evaluation mode: ", mode)
+  }
+
+  df_pred
+}
+
+
+############################
+## 3. MAIN ANALYSIS
+############################
+
+modes_to_run <- switch(
+  evaluation_mode,
+  padj = "padj",
+  topN = "topN",
+  both = c("padj", "topN"),
+  stop("evaluation_mode must be 'padj', 'topN', or 'both'.")
+)
+
+all_scores <- list()
+all_predicted_gene_tables <- list()
+all_unmapped_cluster_tables <- list()
+all_column_check_tables <- list()
+
+for (tool_name in names(tool_configs)) {
+
+  message("\n==============================")
+  message("Processing: ", tool_name)
+  message("==============================")
+
+  cfg <- tool_configs[[tool_name]]
+
+  raw_df <- read_tool_csv(cfg$file)
+
+  check_required_columns(raw_df, cfg, tool_name)
+
+  message("Input file: ", cfg$file)
+  message("Gene column: ", cfg$gene_col)
+  message("Cluster column: ", cfg$cluster_col)
+  message("Padj/FDR/q-value column: ", cfg$padj_col)
+  message("Score/logFC column: ", cfg$score_col)
+
+  column_check <- tibble(
+    tool = tool_name,
+    input_file = cfg$file,
+    gene_col = cfg$gene_col,
+    gene_col_found = cfg$gene_col %in% colnames(raw_df),
+    cluster_col = cfg$cluster_col,
+    cluster_col_found = cfg$cluster_col %in% colnames(raw_df),
+    padj_col = cfg$padj_col,
+    padj_col_found = cfg$padj_col %in% colnames(raw_df),
+    score_col = cfg$score_col,
+    score_col_found = cfg$score_col %in% colnames(raw_df),
+    available_columns = paste(colnames(raw_df), collapse = "; ")
+  )
+
+  all_column_check_tables[[tool_name]] <- column_check
+
+  df <- prepare_tool_table(raw_df, cfg)
+
+  unmapped_clusters <- setdiff(
+    unique(df$tool_cluster_eval),
+    as.character(cfg$cluster_map$tool_cluster)
+  )
+
+  unmapped_cluster_table <- tibble(
+    tool = tool_name,
+    unmapped_cluster = unmapped_clusters
+  )
+
+  all_unmapped_cluster_tables[[tool_name]] <- unmapped_cluster_table
+
+  if (length(unmapped_clusters) > 0) {
+    warning(
+      tool_name,
+      " has unmapped clusters: ",
+      paste(unmapped_clusters, collapse = ", ")
+    )
+  }
+
+  message("Mapped cell type distribution:")
+  print(table(df$truth_celltype, useNA = "ifany"))
+
+  for (ct in target_celltypes) {
+
+    df_ct <- df %>%
+      filter(truth_celltype == ct)
+
+    if (nrow(df_ct) == 0) {
+      warning(tool_name, " has no rows mapped to ", ct)
+    }
+
+    gt_n <- length(ground_truth_markers[[ct]])
+
+    for (mode in modes_to_run) {
+
+      df_pred <- select_predicted_genes(
+        df_ct = df_ct,
+        mode = mode,
+        gt_n = gt_n
+      )
+
+      predicted_genes <- unique(df_pred$gene_eval)
+
+      score <- score_precision_recall_f1(
+        predicted_genes = predicted_genes,
+        ground_truth_genes = ground_truth_markers[[ct]]
+      ) %>%
+        mutate(
+          tool = tool_name,
+          celltype = ct,
+          mode = mode,
+          input_file = cfg$file,
+          gene_col_used = cfg$gene_col,
+          cluster_col_used = cfg$cluster_col,
+          padj_col_used = cfg$padj_col,
+          score_col_used = cfg$score_col,
+          .before = 1
+        )
+
+      all_scores[[paste(tool_name, ct, mode, sep = "__")]] <- score
+
+      pred_table <- df_pred %>%
+        transmute(
+          tool = tool_name,
+          celltype = ct,
+          mode = mode,
+          predicted_gene_raw = gene_raw,
+          predicted_gene_eval = gene_eval,
+          tool_cluster = tool_cluster_eval,
+          truth_celltype = truth_celltype,
+          padj = padj_eval,
+          score = score_eval,
+          is_ground_truth_hit = gene_eval %in% clean_gene(ground_truth_markers[[ct]])
+        ) %>%
+        distinct()
+
+      all_predicted_gene_tables[[paste(tool_name, ct, mode, sep = "__")]] <- pred_table
+    }
+  }
+}
+
+
+############################
+## 4. SAVE OUTPUTS
+############################
+
+score_df <- bind_rows(all_scores) %>%
+  arrange(
+    mode,
+    celltype,
+    desc(f1),
+    desc(precision),
+    desc(recall)
+  )
+
+predicted_genes_df <- bind_rows(all_predicted_gene_tables)
+
+unmapped_clusters_df <- bind_rows(all_unmapped_cluster_tables)
+
+column_check_df <- bind_rows(all_column_check_tables)
+
+summary_file <- file.path(out_dir, "precision_recall_f1_summary.csv")
+predicted_file <- file.path(out_dir, "predicted_genes_used_for_scoring.csv")
+unmapped_cluster_file <- file.path(out_dir, "unmapped_clusters.csv")
+column_check_file <- file.path(out_dir, "tool_column_check.csv")
+
+readr::write_csv(score_df, summary_file)
+readr::write_csv(predicted_genes_df, predicted_file)
+readr::write_csv(unmapped_clusters_df, unmapped_cluster_file)
+readr::write_csv(column_check_df, column_check_file)
+
+message("\nDone.")
+message("Summary saved to: ", summary_file)
+message("Predicted gene list saved to: ", predicted_file)
+message("Unmapped clusters saved to: ", unmapped_cluster_file)
+message("Column check saved to: ", column_check_file)
+
+print(score_df, width = Inf)
+
+
+############################
+## 5. WIDE OUTPUT
+############################
+
+score_wide <- score_df %>%
+  select(
+    tool,
+    celltype,
+    mode,
+    precision,
+    recall,
+    f1,
+    n_ground_truth,
+    n_predicted,
+    true_positive,
+    false_positive,
+    false_negative
+  ) %>%
+  pivot_wider(
+    names_from = c(celltype, mode),
+    values_from = c(
+      precision,
+      recall,
+      f1,
+      n_ground_truth,
+      n_predicted,
+      true_positive,
+      false_positive,
+      false_negative
+    )
+  )
+
+wide_file <- file.path(out_dir, "precision_recall_f1_wide.csv")
+readr::write_csv(score_wide, wide_file)
+
+message("Wide summary saved to: ", wide_file)
+
+
+############################
+## 6. TOOL OVERALL RANKING
+############################
+
+tool_ranking <- score_df %>%
+  mutate(
+    precision_for_ranking = ifelse(is.na(precision), 0, precision),
+    recall_for_ranking = ifelse(is.na(recall), 0, recall),
+    f1_for_ranking = ifelse(is.na(f1), 0, f1)
+  ) %>%
+  group_by(tool, mode) %>%
+  summarise(
+    mean_precision = mean(precision_for_ranking, na.rm = TRUE),
+    mean_recall = mean(recall_for_ranking, na.rm = TRUE),
+    mean_f1 = mean(f1_for_ranking, na.rm = TRUE),
+    total_true_positive = sum(true_positive, na.rm = TRUE),
+    total_false_positive = sum(false_positive, na.rm = TRUE),
+    total_false_negative = sum(false_negative, na.rm = TRUE),
+    total_predicted = sum(n_predicted, na.rm = TRUE),
+    total_ground_truth = sum(n_ground_truth, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  arrange(
+    mode,
+    desc(mean_f1),
+    desc(mean_recall),
+    desc(mean_precision),
+    desc(total_true_positive)
+  )
+
+ranking_file <- file.path(out_dir, "tool_overall_ranking.csv")
+readr::write_csv(tool_ranking, ranking_file)
+
+message("Tool overall ranking saved to: ", ranking_file)
+
+print(tool_ranking, width = Inf)
+
+
+############################
+## 7. BEST TOOL SUMMARY
+############################
+
+best_by_mode <- tool_ranking %>%
+  group_by(mode) %>%
+  slice_max(
+    order_by = mean_f1,
+    n = 1,
+    with_ties = TRUE
+  ) %>%
+  ungroup()
+
+best_file <- file.path(out_dir, "best_tool_by_mode.csv")
+readr::write_csv(best_by_mode, best_file)
+
+message("Best tool by mode saved to: ", best_file)
+
+print(best_by_mode, width = Inf)

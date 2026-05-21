@@ -17,27 +17,27 @@ base_dir <- "D:/OneDrive/Desktop/CMML ICA2/scDesign3_simulation_outputs"
 ## 需要你修改：当前 simulation 的 RDS 文件
 rds_file <- file.path(
   base_dir,
-  "Dataset1_balanced_celltype_condition_rep1_new_count_new_covariate.rds"
+  "Dataset3_unbalanced_13_7_2_celltype_condition_rep2_new_count_new_covariate.rds"
 )
 
 ## 需要你修改：三个工具的 CSV 文件路径
 tool_files <- c(
   Tool1 = file.path(
     base_dir,
-    "TOOL1_FOLDER_NAME",
-    "TOOL1_CLUSTER_FILE.csv"
+     "downstream_outputs_(6)", 
+    "monocle3_clusters_(6).csv" 
   ),
   
   Tool2 = file.path(
     base_dir,
-    "TOOL2_FOLDER_NAME",
-    "TOOL2_CLUSTER_FILE.csv"
+    "downstream_outputs_(6)", 
+    "monocle3_clusters_(6).csv" 
   ),
   
   Tool3 = file.path(
     base_dir,
-    "TOOL3_FOLDER_NAME",
-    "TOOL3_CLUSTER_FILE.csv"
+    "downstream_outputs_(1)", 
+    "monocle3_clusters_(1).csv" 
   )
 )
 

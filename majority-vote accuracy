@@ -31,13 +31,13 @@ tool_files <- c(
   Tool2 = file.path(
     base_dir,
     "downstream_outputs_(6)", 
-    "monocle3_clusters_(6).csv" 
+    "scran_scater_clusters_(6).csv" 
   ),
   
   Tool3 = file.path(
     base_dir,
-    "downstream_outputs_(1)", 
-    "monocle3_clusters_(1).csv" 
+    "downstream_outputs_(6)", 
+    "seurat_clusters_(6).csv" 
   )
 )
 

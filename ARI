@@ -1,0 +1,364 @@
+library(mclust)
+library(dplyr)
+library(readr)
+
+#设置路径
+
+base_dir <- "D:/OneDrive/Desktop/CMML ICA2/scDesign3_simulation_outputs"
+
+setwd(base_dir)
+
+rds_file <- file.path(
+  base_dir,
+  "Dataset1_balanced_celltype_condition_rep1_new_count_new_covariate.rds"
+)
+
+#读取 RDS
+sce_raw <- readRDS(rds_file)
+
+cat("RDS 对象类型：\n")
+print(class(sce_raw))
+
+cat("RDS list 名称：\n")
+print(names(sce_raw))
+
+cat("RDS list 每个元素的类型：\n")
+print(lapply(sce_raw, class))
+ 
+#从 new_covariate 提取 ground truth metadata
+meta <- as.data.frame(sce_raw$new_covariate)
+
+cat("new_covariate 列名：\n")
+print(colnames(meta))
+
+cat("new_covariate 前几行：\n")
+print(head(meta))
+
+#构建 truth_df
+if ("cell" %in% colnames(meta)) {
+  
+  truth_df <- data.frame(
+    cell = as.character(meta$cell),
+    author_cell_type = as.character(meta$author_cell_type),
+    stringsAsFactors = FALSE
+  )
+  
+} else {
+  
+  truth_df <- data.frame(
+    cell = as.character(rownames(meta)),
+    author_cell_type = as.character(meta$author_cell_type),
+    stringsAsFactors = FALSE
+  )
+}
+
+cat("ground truth 前几行：\n")
+print(head(truth_df))
+
+cat("ground truth 细胞数：\n")
+print(nrow(truth_df))
+
+cat("真实 cell type 分布：\n")
+print(table(truth_df$author_cell_type, useNA = "ifany"))
+
+cat("重复 cell 数量：\n")
+print(sum(duplicated(truth_df$cell)))
+
+#设置三个工具的 CSV 文件路径
+tool_files <- c(
+  Tool1 = file.path(
+    base_dir,
+    "downstream_outputs_(1)", 
+    "monocle3_clusters_(1).csv" 
+  ),
+  
+  Tool2 = file.path(
+    base_dir,
+    "downstream_outputs_(1)",
+    "scran_scater_clusters_(1).csv" 
+  ),
+  
+  Tool3 = file.path(
+    base_dir,
+    "downstream_outputs_(1)",  
+    "seurat_clusters_(1).csv"  
+  )
+)
+
+############################################################
+## 5. 检查 CSV 文件是否存在
+############################################################
+
+file_check <- data.frame(
+  tool = names(tool_files),
+  file = as.character(tool_files),
+  exists = file.exists(tool_files),
+  stringsAsFactors = FALSE
+)
+
+print(file_check)
+
+## 如果 exists 有 FALSE，说明路径或文件名需要修改
+if (any(!file.exists(tool_files))) {
+  stop("有 CSV 文件路径不存在，请检查 tool_files 里面的文件夹名和文件名。")
+}
+
+
+############################################################
+## 6. 定义计算 ARI 的函数
+############################################################
+
+calc_ari_for_one_tool <- function(tool_name, cluster_file, truth_df) {
+  
+  message("正在处理：", tool_name)
+  
+  ##########################################################
+  ## 6.1 读取工具输出的 CSV
+  ##########################################################
+  
+  cluster_df <- read.csv(
+    cluster_file,
+    stringsAsFactors = FALSE,
+    check.names = FALSE
+  )
+  
+  ## 检查 CSV 里面是否有需要的列
+  required_cols <- c("cell", "cluster")
+  
+  if (!all(required_cols %in% colnames(cluster_df))) {
+    stop(
+      paste0(
+        "文件 ", cluster_file,
+        " 缺少 cell 或 cluster 列。当前列名是：",
+        paste(colnames(cluster_df), collapse = ", ")
+      )
+    )
+  }
+  
+  ##########################################################
+  ## 6.2 只保留 cell 和 cluster
+  ##########################################################
+  
+  cluster_df <- cluster_df[, c("cell", "cluster")]
+  
+  ## 确保 cell 是字符型
+  cluster_df$cell <- as.character(cluster_df$cell)
+  truth_df$cell <- as.character(truth_df$cell)
+  
+  ##########################################################
+  ## 6.3 检查重复 cell
+  ##########################################################
+  
+  n_dup_cluster <- sum(duplicated(cluster_df$cell))
+  
+  if (n_dup_cluster > 0) {
+    message("注意：", tool_name, " 的 cluster CSV 中有重复 cell：", n_dup_cluster)
+    message("将保留每个 cell 的第一条记录。")
+    cluster_df <- cluster_df[!duplicated(cluster_df$cell), ]
+  }
+  
+  ##########################################################
+  ## 6.4 按 cell 合并 ground truth 和 cluster
+  ##########################################################
+  
+  merged_df <- merge(
+    truth_df,
+    cluster_df,
+    by = "cell",
+    all = FALSE
+  )
+  
+  ##########################################################
+  ## 6.5 处理缺失值
+  ##########################################################
+  
+  n_before_na_filter <- nrow(merged_df)
+  
+  filtered_df <- merged_df[
+    !is.na(merged_df$author_cell_type) &
+      !is.na(merged_df$cluster) &
+      merged_df$author_cell_type != "" &
+      merged_df$cluster != "",
+  ]
+  
+  n_after_na_filter <- nrow(filtered_df)
+  n_removed_na <- n_before_na_filter - n_after_na_filter
+  
+  ##########################################################
+  ## 6.6 计算 ARI
+  ##########################################################
+  
+  if (nrow(filtered_df) == 0) {
+    ari_value <- NA
+  } else {
+    ari_value <- adjustedRandIndex(
+      as.factor(filtered_df$cluster),
+      as.factor(filtered_df$author_cell_type)
+    )
+  }
+  
+  ##########################################################
+  ## 6.7 输出该工具的统计结果
+  ##########################################################
+  
+  result <- data.frame(
+    tool = tool_name,
+    file = basename(cluster_file),
+    n_truth_cells = nrow(truth_df),
+    n_cluster_cells = nrow(cluster_df),
+    n_matched_cells = nrow(merged_df),
+    n_used_cells_after_removing_NA = nrow(filtered_df),
+    n_removed_due_to_NA_or_empty = n_removed_na,
+    n_unmatched_truth_cells = nrow(truth_df) - nrow(merged_df),
+    n_unmatched_cluster_cells = nrow(cluster_df) - nrow(merged_df),
+    n_truth_cell_types_used = length(unique(filtered_df$author_cell_type)),
+    n_clusters_used = length(unique(filtered_df$cluster)),
+    ARI = ari_value,
+    stringsAsFactors = FALSE
+  )
+  
+  return(result)
+}
+
+
+############################################################
+## 7. 对三个工具批量计算 ARI
+############################################################
+
+ari_results <- do.call(
+  rbind,
+  mapply(
+    FUN = calc_ari_for_one_tool,
+    tool_name = names(tool_files),
+    cluster_file = tool_files,
+    MoreArgs = list(truth_df = truth_df),
+    SIMPLIFY = FALSE
+  )
+)
+
+############################################################
+## 8. 按 ARI 从高到低排序
+############################################################
+
+ari_results <- ari_results[order(-ari_results$ARI), ]
+
+print(ari_results)
+
+
+############################################################
+## 9. 保存 ARI 结果
+############################################################
+
+output_file <- file.path(base_dir, "ARI_results_three_tools.csv")
+
+write.csv(
+  ari_results,
+  output_file,
+  row.names = FALSE
+)
+
+message("ARI 结果已保存到：", output_file)
+
+
+############################################################
+## 10. 可选：查看每个工具 cluster vs author_cell_type 的交叉表
+############################################################
+
+## 这个函数可以帮助你看某个工具的 cluster 对应哪些真实 cell type
+
+make_cluster_truth_table <- function(cluster_file, truth_df) {
+  
+  cluster_df <- read.csv(
+    cluster_file,
+    stringsAsFactors = FALSE,
+    check.names = FALSE
+  )
+  
+  cluster_df <- cluster_df[, c("cell", "cluster")]
+  cluster_df$cell <- as.character(cluster_df$cell)
+  truth_df$cell <- as.character(truth_df$cell)
+  
+  cluster_df <- cluster_df[!duplicated(cluster_df$cell), ]
+  
+  merged_df <- merge(
+    truth_df,
+    cluster_df,
+    by = "cell",
+    all = FALSE
+  )
+  
+  merged_df <- merged_df[
+    !is.na(merged_df$author_cell_type) &
+      !is.na(merged_df$cluster) &
+      merged_df$author_cell_type != "" &
+      merged_df$cluster != "",
+  ]
+  
+  tab <- table(
+    cluster = merged_df$cluster,
+    author_cell_type = merged_df$author_cell_type
+  )
+  
+  return(tab)
+}
+
+
+############################################################
+## 11. 分别生成三个工具的 cluster-cell type 对照表
+############################################################
+
+tab_tool1 <- make_cluster_truth_table(tool_files["Tool1"], truth_df)
+tab_tool2 <- make_cluster_truth_table(tool_files["Tool2"], truth_df)
+tab_tool3 <- make_cluster_truth_table(tool_files["Tool3"], truth_df)
+
+tab_tool1
+tab_tool2
+tab_tool3
+
+
+############################################################
+## 12. 保存交叉表
+############################################################
+
+write.csv(
+  as.data.frame.matrix(tab_tool1),
+  file.path(base_dir, "cluster_vs_celltype_Tool1.csv")
+)
+
+write.csv(
+  as.data.frame.matrix(tab_tool2),
+  file.path(base_dir, "cluster_vs_celltype_Tool2.csv")
+)
+
+write.csv(
+  as.data.frame.matrix(tab_tool3),
+  file.path(base_dir, "cluster_vs_celltype_Tool3.csv")
+)
+
+
+make_cluster_truth_table <- function(cluster_file, truth_df) {
+  
+  cluster_df <- read.csv(cluster_file, stringsAsFactors = FALSE, check.names = FALSE)
+  cluster_df <- cluster_df[, c("cell", "cluster")]
+  
+  cluster_df$cell <- as.character(cluster_df$cell)
+  cluster_df$cluster <- as.character(cluster_df$cluster)
+  
+  merged_df <- merge(truth_df, cluster_df, by = "cell")
+  
+  merged_df <- merged_df[
+    !is.na(merged_df$author_cell_type) &
+      !is.na(merged_df$cluster) &
+      merged_df$author_cell_type != "" &
+      merged_df$cluster != "",
+  ]
+  
+  table(
+    cluster = merged_df$cluster,
+    author_cell_type = merged_df$author_cell_type
+  )
+}
+
+make_cluster_truth_table(tool_files["Tool1"], truth_df)
+make_cluster_truth_table(tool_files["Tool2"], truth_df)
+make_cluster_truth_table(tool_files["Tool3"], truth_df)

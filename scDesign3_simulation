@@ -1,6 +1,4 @@
-## =========================================================
-## scDesign3 simulation: 3 datasets x 2 replicates
-## =========================================================
+#scDesign3 simulation: 3 datasets x 2 replicates
 
 suppressPackageStartupMessages({
   library(scDesign3)
@@ -11,9 +9,7 @@ suppressPackageStartupMessages({
   library(BiocParallel)
 })
 
-## -------------------------
-## 1. 路径设置
-## -------------------------
+#读取reference SCE
 infile <- "D:/OneDrive/Desktop/CMML ICA2/sce_sub_dExN_RG_InhN_1500each_2000HVG.rds"
 outdir <- "D:/OneDrive/Desktop/CMML ICA2/scDesign3_simulation_outputs"
 
@@ -21,17 +17,14 @@ if (!dir.exists(outdir)) dir.create(outdir, recursive = TRUE)
 
 sce0 <- readRDS(infile)
 
-## -------------------------
-## 2. 基本检查与因子化
-## -------------------------
 required_cols <- c("author_cell_type", "condition", "batch")
 missing_cols <- setdiff(required_cols, colnames(colData(sce0)))
 if (length(missing_cols) > 0) {
-  stop("colData(sce0) 中缺少这些列: ", paste(missing_cols, collapse = ", "))
+  stop()
 }
 
 if (!"counts" %in% assayNames(sce0)) {
-  stop("assayNames(sce0) 中没有 counts。")
+  stop()
 }
 
 colData(sce0)$author_cell_type <- factor(colData(sce0)$author_cell_type)
@@ -47,10 +40,7 @@ print(table(colData(sce0)$condition))
 cat("\nOriginal batch table:\n")
 print(table(colData(sce0)$batch))
 
-## -------------------------
-## 3. 按目标比例重采样 reference SCE
-##    这样 scDesign3 学到的 covariate 分布会接近目标比例
-## -------------------------
+# 按目标比例重采样 reference SCE
 make_reference_by_celltype <- function(
     sce,
     target_n_by_type,
@@ -63,13 +53,7 @@ make_reference_by_celltype <- function(
   target_types <- names(target_n_by_type)
 
   if (!all(target_types %in% unique(ct))) {
-    stop(
-      "target_n_by_type 中有 cell type 不存在于 sce$",
-      celltype_col,
-      "。目标: ",
-      paste(target_types, collapse = ", "),
-      "；实际: ",
-      paste(unique(ct), collapse = ", ")
+    stop()
     )
   }
 
@@ -90,16 +74,34 @@ make_reference_by_celltype <- function(
   sce_new
 }
 
-## Dataset1 / Dataset2: balanced
-## 输入本身文件名显示每类 1500 each；这里仍显式构造，保证 balanced。
+#合并 Mature dExN 和 Young dExN 为 dExN
+colData(sce0)$author_cell_type_raw <- colData(sce0)$author_cell_type
+
+colData(sce0)$author_cell_type <- as.character(colData(sce0)$author_cell_type)
+
+colData(sce0)$author_cell_type[
+  colData(sce0)$author_cell_type %in% c("Mature dExN", "Young dExN")
+] <- "dExN"
+
+colData(sce0)$author_cell_type <- factor(
+  colData(sce0)$author_cell_type,
+  levels = c("dExN", "RG", "InhN")
+)
+
+colData(sce0)$condition <- factor(colData(sce0)$condition)
+colData(sce0)$batch <- factor(colData(sce0)$batch)
+
+cat("Merged author_cell_type table:\n")
+print(table(colData(sce0)$author_cell_type))
+
+# Dataset1 / Dataset2: balanced
 target_balanced_4500 <- c(
   dExN = 1500,
   RG   = 1500,
   InhN = 1500
 )
 
-## Dataset3: dExN : RG : InhN = 13 : 7 : 2
-## 为了输入仍是 4500 cells，按 4500 * ratio 四舍五入并调整总和。
+# Dataset3: dExN : RG : InhN = 13 : 7 : 2
 ratio_13_7_2 <- c(dExN = 13, RG = 7, InhN = 2)
 target_unbalanced_4500 <- round(4500 * ratio_13_7_2 / sum(ratio_13_7_2))
 target_unbalanced_4500["dExN"] <- target_unbalanced_4500["dExN"] +
@@ -129,12 +131,8 @@ print(table(colData(sce_balanced)$author_cell_type))
 cat("\nUnbalanced reference table:\n")
 print(table(colData(sce_unbalanced)$author_cell_type))
 
-## -------------------------
-## 4. scDesign3 统一参数
-## -------------------------
+# scDesign3 统一参数
 n_cores <- 4
-
-## Windows 上 mcmapply 可能不可用/不稳定，用 bpmapply + SnowParam 更稳。
 bp <- BiocParallel::SnowParam(workers = n_cores, type = "SOCK")
 
 common_args <- list(
@@ -159,9 +157,7 @@ common_args <- list(
   BPPARAM = bp
 )
 
-## -------------------------
-## 5. 单次模拟函数
-## -------------------------
+# 单次模拟
 run_one_scdesign3 <- function(
     sce,
     mu_formula,
@@ -227,9 +223,8 @@ run_one_scdesign3 <- function(
   invisible(my_simu)
 }
 
-## -------------------------
-## 6. 三种 dataset，每种两个模拟集
-## -------------------------
+
+# 6. 三种 dataset，每种两个模拟集
 all_simu <- list()
 
 ## Dataset1:
@@ -271,9 +266,8 @@ for (rep_id in 1:2) {
   )
 }
 
-## -------------------------
-## 7. 汇总保存
-## -------------------------
+
+# 汇总保存
 summary_table <- do.call(
   rbind,
   lapply(names(all_simu), function(nm) {

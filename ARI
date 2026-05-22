@@ -2,8 +2,6 @@ library(mclust)
 library(dplyr)
 library(readr)
 
-#设置路径
-
 base_dir <- "D:/OneDrive/Desktop/CMML ICA2/scDesign3_simulation_outputs"
 
 setwd(base_dir)
@@ -85,9 +83,8 @@ tool_files <- c(
   )
 )
 
-############################################################
-## 5. 检查 CSV 文件是否存在
-############################################################
+#检查 CSV 文件是否存在
+
 
 file_check <- data.frame(
   tool = names(tool_files),
@@ -98,23 +95,15 @@ file_check <- data.frame(
 
 print(file_check)
 
-## 如果 exists 有 FALSE，说明路径或文件名需要修改
-if (any(!file.exists(tool_files))) {
-  stop("有 CSV 文件路径不存在，请检查 tool_files 里面的文件夹名和文件名。")
-}
 
-
-############################################################
-## 6. 定义计算 ARI 的函数
-############################################################
+#定义计算 ARI 的函数
 
 calc_ari_for_one_tool <- function(tool_name, cluster_file, truth_df) {
   
   message("正在处理：", tool_name)
   
-  ##########################################################
-  ## 6.1 读取工具输出的 CSV
-  ##########################################################
+  
+  #读取工具输出的 CSV
   
   cluster_df <- read.csv(
     cluster_file,
@@ -122,44 +111,18 @@ calc_ari_for_one_tool <- function(tool_name, cluster_file, truth_df) {
     check.names = FALSE
   )
   
-  ## 检查 CSV 里面是否有需要的列
-  required_cols <- c("cell", "cluster")
   
-  if (!all(required_cols %in% colnames(cluster_df))) {
-    stop(
-      paste0(
-        "文件 ", cluster_file,
-        " 缺少 cell 或 cluster 列。当前列名是：",
-        paste(colnames(cluster_df), collapse = ", ")
-      )
-    )
-  }
-  
-  ##########################################################
-  ## 6.2 只保留 cell 和 cluster
-  ##########################################################
+  #保留 cell 和 cluster
   
   cluster_df <- cluster_df[, c("cell", "cluster")]
   
-  ## 确保 cell 是字符型
+  #修改格式
   cluster_df$cell <- as.character(cluster_df$cell)
   truth_df$cell <- as.character(truth_df$cell)
   
-  ##########################################################
-  ## 6.3 检查重复 cell
-  ##########################################################
-  
   n_dup_cluster <- sum(duplicated(cluster_df$cell))
   
-  if (n_dup_cluster > 0) {
-    message("注意：", tool_name, " 的 cluster CSV 中有重复 cell：", n_dup_cluster)
-    message("将保留每个 cell 的第一条记录。")
-    cluster_df <- cluster_df[!duplicated(cluster_df$cell), ]
-  }
-  
-  ##########################################################
-  ## 6.4 按 cell 合并 ground truth 和 cluster
-  ##########################################################
+  #合并 ground truth 和 cluster
   
   merged_df <- merge(
     truth_df,
@@ -168,9 +131,7 @@ calc_ari_for_one_tool <- function(tool_name, cluster_file, truth_df) {
     all = FALSE
   )
   
-  ##########################################################
-  ## 6.5 处理缺失值
-  ##########################################################
+  #处理缺失值
   
   n_before_na_filter <- nrow(merged_df)
   
@@ -184,9 +145,7 @@ calc_ari_for_one_tool <- function(tool_name, cluster_file, truth_df) {
   n_after_na_filter <- nrow(filtered_df)
   n_removed_na <- n_before_na_filter - n_after_na_filter
   
-  ##########################################################
-  ## 6.6 计算 ARI
-  ##########################################################
+  #计算 ARI
   
   if (nrow(filtered_df) == 0) {
     ari_value <- NA
@@ -196,10 +155,6 @@ calc_ari_for_one_tool <- function(tool_name, cluster_file, truth_df) {
       as.factor(filtered_df$author_cell_type)
     )
   }
-  
-  ##########################################################
-  ## 6.7 输出该工具的统计结果
-  ##########################################################
   
   result <- data.frame(
     tool = tool_name,
@@ -220,10 +175,7 @@ calc_ari_for_one_tool <- function(tool_name, cluster_file, truth_df) {
   return(result)
 }
 
-
-############################################################
-## 7. 对三个工具批量计算 ARI
-############################################################
+#计算 ARI
 
 ari_results <- do.call(
   rbind,
@@ -235,19 +187,9 @@ ari_results <- do.call(
     SIMPLIFY = FALSE
   )
 )
-
-############################################################
-## 8. 按 ARI 从高到低排序
-############################################################
-
 ari_results <- ari_results[order(-ari_results$ARI), ]
 
 print(ari_results)
-
-
-############################################################
-## 9. 保存 ARI 结果
-############################################################
 
 output_file <- file.path(base_dir, "ARI_results_three_tools.csv")
 
@@ -260,12 +202,7 @@ write.csv(
 message("ARI 结果已保存到：", output_file)
 
 
-############################################################
-## 10. 可选：查看每个工具 cluster vs author_cell_type 的交叉表
-############################################################
-
-## 这个函数可以帮助你看某个工具的 cluster 对应哪些真实 cell type
-
+#查看每个工具 cluster vs author_cell_type 的表
 make_cluster_truth_table <- function(cluster_file, truth_df) {
   
   cluster_df <- read.csv(
@@ -302,11 +239,6 @@ make_cluster_truth_table <- function(cluster_file, truth_df) {
   return(tab)
 }
 
-
-############################################################
-## 11. 分别生成三个工具的 cluster-cell type 对照表
-############################################################
-
 tab_tool1 <- make_cluster_truth_table(tool_files["Tool1"], truth_df)
 tab_tool2 <- make_cluster_truth_table(tool_files["Tool2"], truth_df)
 tab_tool3 <- make_cluster_truth_table(tool_files["Tool3"], truth_df)
@@ -315,10 +247,7 @@ tab_tool1
 tab_tool2
 tab_tool3
 
-
-############################################################
-## 12. 保存交叉表
-############################################################
+# 保存
 
 write.csv(
   as.data.frame.matrix(tab_tool1),

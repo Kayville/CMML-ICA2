@@ -192,7 +192,6 @@ run_one_scdesign3 <- function(
     stop(dataset_name, "_rep", replicate_id, ": my_simu$new_covariate is NULL. 请确认 ncell != ncol(sce)。")
   }
 
-  ## 只保留用户要求的核心输出，同时也保存完整对象，方便后续追溯。
   core_out <- list(
     new_count = my_simu$new_count,
     new_covariate = my_simu$new_covariate
@@ -224,7 +223,7 @@ run_one_scdesign3 <- function(
 }
 
 
-# 6. 三种 dataset，每种两个模拟集
+# 三种 dataset，每种两个模拟集
 all_simu <- list()
 
 ## Dataset1:

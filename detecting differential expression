@@ -1,18 +1,4 @@
-############################################################
-## DE marker evaluation for multiple tools
-## Precision / Recall / F1
-##
-## This version:
-##   - Uses simulated gene IDs directly, e.g. gene_2278
-##   - Does NOT use gene symbol / ENSG mapping
-##   - Supports different CSV headers for each tool
-##   - Outputs per-celltype scores and overall tool ranking
-############################################################
-
-
-############################
-## 0. USER INPUT SECTION
-############################
+#INPUT SECTION
 
 base_dir <- "D:/OneDrive/Desktop/CMML ICA2/scDesign3_simulation_outputs/downstream_outputs_(1)"
 
@@ -20,17 +6,10 @@ target_celltypes <- c("dExN", "RG", "InhN")
 
 padj_threshold <- 0.05
 
-## "padj" : predicted genes = q/p adjusted value < threshold
-## "topN" : predicted genes = top N genes, N = number of ground truth genes
-## "both" : run both
 evaluation_mode <- "both"
 
+#Ground truth markers
 
-############################
-## 0.1 Ground truth markers
-############################
-
-## Directly use simulated gene IDs
 ground_truth_markers <- list(
   dExN = c(
     "gene_2278",
@@ -55,9 +34,7 @@ ground_truth_markers <- list(
 )
 
 
-############################
-## 0.2 Tool-specific settings
-############################
+# Tool-specific settings
 
 tool_configs <- list(
 
@@ -120,9 +97,8 @@ out_dir <- file.path(base_dir, "precision_recall_f1_outputs")
 dir.create(out_dir, showWarnings = FALSE, recursive = TRUE)
 
 
-############################
-## 1. PACKAGE SETUP
-############################
+#PACKAGE SETUP
+
 
 required_pkgs <- c(
   "readr",
@@ -146,10 +122,7 @@ suppressPackageStartupMessages({
   library(stringr)
 })
 
-
-############################
-## 2. HELPER FUNCTIONS
-############################
+# HELPER FUNCTIONS
 
 clean_gene <- function(x) {
   x <- as.character(x)
@@ -322,9 +295,7 @@ select_predicted_genes <- function(df_ct, mode, gt_n) {
 }
 
 
-############################
-## 3. MAIN ANALYSIS
-############################
+#MAIN ANALYSIS
 
 modes_to_run <- switch(
   evaluation_mode,
@@ -458,9 +429,7 @@ for (tool_name in names(tool_configs)) {
 }
 
 
-############################
-## 4. SAVE OUTPUTS
-############################
+# SAVE OUTPUTS
 
 score_df <- bind_rows(all_scores) %>%
   arrange(
@@ -495,10 +464,7 @@ message("Column check saved to: ", column_check_file)
 
 print(score_df, width = Inf)
 
-
-############################
-## 5. WIDE OUTPUT
-############################
+#WIDE OUTPUT
 
 score_wide <- score_df %>%
   select(
@@ -534,9 +500,7 @@ readr::write_csv(score_wide, wide_file)
 message("Wide summary saved to: ", wide_file)
 
 
-############################
-## 6. TOOL OVERALL RANKING
-############################
+# TOOL OVERALL RANKING
 
 tool_ranking <- score_df %>%
   mutate(
@@ -571,23 +535,3 @@ message("Tool overall ranking saved to: ", ranking_file)
 
 print(tool_ranking, width = Inf)
 
-
-############################
-## 7. BEST TOOL SUMMARY
-############################
-
-best_by_mode <- tool_ranking %>%
-  group_by(mode) %>%
-  slice_max(
-    order_by = mean_f1,
-    n = 1,
-    with_ties = TRUE
-  ) %>%
-  ungroup()
-
-best_file <- file.path(out_dir, "best_tool_by_mode.csv")
-readr::write_csv(best_by_mode, best_file)
-
-message("Best tool by mode saved to: ", best_file)
-
-print(best_by_mode, width = Inf)

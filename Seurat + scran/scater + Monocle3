@@ -1,19 +1,4 @@
-############################################################
-## scDesign3 simulation downstream workflows
-## Seurat + scran/scater + Monocle3
-##
-## Input RDS structure:
-##   obj$new_count
-##   obj$new_covariate
-##
-## Current simulation label: (1)
-############################################################
-
-
-############################
-## 0. User settings
-############################
-
+#输入
 sim_label <- "(1)"
 
 base_dir <- "D:/OneDrive/Desktop/CMML ICA2/scDesign3_simulation_outputs"
@@ -36,42 +21,6 @@ outdir <- file.path(
 dir.create(outdir, showWarnings = FALSE, recursive = TRUE)
 
 set.seed(123)
-
-## 如果 Monocle3 还没有装好，可以先设为 FALSE
-run_monocle3 <- TRUE
-
-
-############################
-## 1. Load packages
-############################
-
-required_packages <- c(
-  "Matrix",
-  "Seurat",
-  "SingleCellExperiment",
-  "scater",
-  "scran",
-  "scuttle",
-  "bluster",
-  "igraph"
-)
-
-if (run_monocle3) {
-  required_packages <- c(required_packages, "monocle3")
-}
-
-missing_packages <- required_packages[
-  !vapply(required_packages, requireNamespace, logical(1), quietly = TRUE)
-]
-
-if (length(missing_packages) > 0) {
-  stop(
-    "These packages are missing:\n",
-    paste(missing_packages, collapse = ", "),
-    "\nPlease install them first, then rerun this script."
-  )
-}
-
 library(Matrix)
 library(Seurat)
 library(SingleCellExperiment)
@@ -81,15 +30,7 @@ library(scuttle)
 library(bluster)
 library(igraph)
 
-if (run_monocle3) {
-  library(monocle3)
-}
-
-
-############################
-## 2. Helper functions
-############################
-
+# Helper function
 standardize_counts <- function(counts) {
   if (is.data.frame(counts)) {
     counts <- as.matrix(counts)
@@ -182,10 +123,7 @@ safe_write_csv <- function(x, filename) {
 }
 
 
-############################
-## 3. Read RDS files
-############################
-
+# Read RDS files
 if (!file.exists(file_count_covariate)) {
   stop("Cannot find file_count_covariate: ", file_count_covariate)
 }
@@ -205,10 +143,7 @@ cat("Object names:\n")
 print(names(obj_count_covariate))
 
 
-############################
-## 4. Extract counts and metadata
-############################
-
+# Extract counts and metadata
 sim_counts <- obj_count_covariate$new_count
 cell_metadata <- obj_count_covariate$new_covariate
 
@@ -257,10 +192,7 @@ safe_write_csv(
   file.path(outdir, paste0("input_cell_metadata_", sim_label, ".csv"))
 )
 
-
-############################################################
-## 5. Seurat workflow
-############################################################
+#Seurat workflow
 
 cat("\n==============================\n")
 cat("Running Seurat workflow...\n")
@@ -323,7 +255,7 @@ seurat_umap <- as.data.frame(Embeddings(seu, reduction = "umap"))
 seurat_umap$cell <- rownames(seurat_umap)
 seurat_umap$simulation <- sim_label
 
-## 统一列名
+# 统一列名
 if (all(c("umap_1", "umap_2") %in% colnames(seurat_umap))) {
   seurat_umap_out <- data.frame(
     cell = seurat_umap$cell,
@@ -368,15 +300,12 @@ saveRDS(
 cat("Seurat workflow finished.\n")
 
 
-############################################################
-## 6. scran / scater Bioconductor workflow
-############################################################
+# scran / scater Bioconductor workflow
 
 cat("\n==============================\n")
 cat("Running scran/scater workflow...\n")
 cat("==============================\n")
 
-## 重新创建 sce，避免之前被覆盖成 factor
 sce <- SingleCellExperiment(
   assays = list(counts = sim_counts),
   colData = cell_metadata
@@ -408,7 +337,6 @@ sce <- runPCA(
 
 dims_use_scran <- 1:min(20, n_pcs_scran)
 
-## 重点：clusterCells 的结果单独保存，不能覆盖 sce
 scran_cluster_labels <- clusterCells(
   sce,
   use.dimred = "PCA",
@@ -511,10 +439,7 @@ saveRDS(
 
 cat("scran/scater workflow finished.\n")
 
-############################################################
-## 7. Monocle3 workflow
-############################################################
-
+#Monocle3 workflow
 if (run_monocle3) {
 
   cat("\n==============================\n")
@@ -623,10 +548,7 @@ if (run_monocle3) {
 }
 
 
-############################################################
-## 8. Combined outputs
-############################################################
-
+#Combined outputs
 cat("\n==============================\n")
 cat("Writing combined outputs...\n")
 cat("==============================\n")
@@ -687,11 +609,7 @@ safe_write_csv(
   file.path(outdir, paste0("all_methods_umap_", sim_label, ".csv"))
 )
 
-
-############################################################
-## 9. Save marker summary
-############################################################
-
+#save
 cat("\n==============================\n")
 cat("Writing marker summaries...\n")
 cat("==============================\n")
@@ -739,12 +657,7 @@ if (run_monocle3) {
     monocle_top20,
     file.path(outdir, paste0("monocle3_top20_markers_by_cluster_", sim_label, ".csv"))
   )
-}
-
-
-############################################################
-## 10. Save session info
-############################################################
+）
 
 save_session_info(outdir, sim_label)
 

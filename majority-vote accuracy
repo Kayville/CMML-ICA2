@@ -1,26 +1,12 @@
-############################################################
-## Majority-vote accuracy for clustering tools
-############################################################
-
 library(dplyr)
 
-############################################################
-## 1. 设置路径
-############################################################
-
 base_dir <- "D:/OneDrive/Desktop/CMML ICA2/scDesign3_simulation_outputs"
-
-############################################################
-## 2. 设置当前 simulation 的输入文件
-############################################################
-
-## 需要你修改：当前 simulation 的 RDS 文件
+#输入
 rds_file <- file.path(
   base_dir,
   "Dataset3_unbalanced_13_7_2_celltype_condition_rep2_new_count_new_covariate.rds"
 )
 
-## 需要你修改：三个工具的 CSV 文件路径
 tool_files <- c(
   Tool1 = file.path(
     base_dir,
@@ -40,21 +26,9 @@ tool_files <- c(
     "seurat_clusters_(6).csv" 
   )
 )
-
-## 如果 CSV 里有 simulation 列，并且你只想保留某一个 simulation，就在这里设置
-## 如果不需要筛选 simulation，就设置为 NULL
-simulation_keep <- NULL
-
-## 例如：
-## simulation_keep <- -1
-## simulation_keep <- 1
-
-## 输出文件前缀，两个 simulation 可以改成不同名字
 output_prefix <- "simulation1"
 
-############################################################
-## 3. 读取 ground truth
-############################################################
+#读取 ground truth
 
 sce_raw <- readRDS(rds_file)
 
@@ -90,9 +64,7 @@ truth_df <- truth_df[!duplicated(truth_df$cell), ]
 cat("Ground truth cells:", nrow(truth_df), "\n")
 print(table(truth_df$author_cell_type))
 
-############################################################
-## 4. 定义 majority-vote accuracy 函数
-############################################################
+# 定义 majority-vote accuracy 函数
 
 calc_majority_vote_accuracy <- function(tool_name, cluster_file, truth_df, simulation_keep = NULL) {
   
@@ -107,44 +79,12 @@ calc_majority_vote_accuracy <- function(tool_name, cluster_file, truth_df, simul
   
   if (!all(c("cell", "cluster") %in% colnames(cluster_df))) {
     stop(
-      paste0(
-        tool_name,
-        " 的 CSV 缺少 cell 或 cluster 列。当前列名是：",
-        paste(colnames(cluster_df), collapse = ", ")
+      paste0()
       )
     )
   }
   
-  ##########################################################
-  ## 如果有 simulation 列，并且指定了 simulation_keep，就筛选
-  ##########################################################
-  
-  if (!is.null(simulation_keep)) {
-    
-    if (!"simulation" %in% colnames(cluster_df)) {
-      stop(paste0(tool_name, " 没有 simulation 列，不能筛选 simulation。"))
-    }
-    
-    cluster_df <- cluster_df[cluster_df$simulation == simulation_keep, ]
-  }
-  
-  cluster_df <- cluster_df[, c("cell", "cluster")]
-  
-  cluster_df$cell <- as.character(cluster_df$cell)
-  cluster_df$cluster <- as.character(cluster_df$cluster)
-  
-  cluster_df <- cluster_df[
-    !is.na(cluster_df$cell) &
-      !is.na(cluster_df$cluster) &
-      cluster_df$cell != "" &
-      cluster_df$cluster != "",
-  ]
-  
-  cluster_df <- cluster_df[!duplicated(cluster_df$cell), ]
-  
-  ##########################################################
-  ## 按 cell 合并
-  ##########################################################
+  #合并
   
   merged_df <- merge(
     truth_df,
@@ -154,13 +94,11 @@ calc_majority_vote_accuracy <- function(tool_name, cluster_file, truth_df, simul
   )
   
   if (nrow(merged_df) == 0) {
-    stop(paste0(tool_name, " 没有和 ground truth 匹配上的 cell。"))
+    stop(paste0())
   }
   
-  ##########################################################
-  ## 每个 cluster 通过 majority vote 映射到真实 cell type
-  ##########################################################
-  
+  # 每个 cluster 通过 majority vote 映射到真实 cell type
+ 
   cluster_mapping <- merged_df %>%
     count(cluster, author_cell_type, name = "n") %>%
     group_by(cluster) %>%
@@ -168,9 +106,7 @@ calc_majority_vote_accuracy <- function(tool_name, cluster_file, truth_df, simul
     ungroup() %>%
     rename(predicted_cell_type = author_cell_type)
   
-  ##########################################################
-  ## 把预测标签合并回每个 cell
-  ##########################################################
+  #把预测标签合并回每个 cell
   
   pred_df <- merged_df %>%
     left_join(cluster_mapping[, c("cluster", "predicted_cell_type")], by = "cluster") %>%
@@ -178,10 +114,8 @@ calc_majority_vote_accuracy <- function(tool_name, cluster_file, truth_df, simul
   
   majority_vote_accuracy <- mean(pred_df$correct)
   
-  ##########################################################
-  ## 输出 summary
-  ##########################################################
-  
+  #输出 summary
+ 
   result <- data.frame(
     tool = tool_name,
     file = basename(cluster_file),
@@ -203,9 +137,7 @@ calc_majority_vote_accuracy <- function(tool_name, cluster_file, truth_df, simul
   )
 }
 
-############################################################
-## 5. 对三个工具计算 majority-vote accuracy
-############################################################
+#对三个工具计算 majority-vote accuracy
 
 mv_results_list <- lapply(names(tool_files), function(tool_name) {
   calc_majority_vote_accuracy(
@@ -217,10 +149,6 @@ mv_results_list <- lapply(names(tool_files), function(tool_name) {
 })
 
 names(mv_results_list) <- names(tool_files)
-
-############################################################
-## 6. 汇总三个工具的 majority-vote accuracy
-############################################################
 
 mv_summary <- do.call(
   rbind,
@@ -234,10 +162,7 @@ mv_summary$majority_vote_accuracy <- sprintf(
 
 print(mv_summary)
 
-############################################################
-## 7. 保存结果
-############################################################
-
+#保存结果
 summary_file <- file.path(
   base_dir,
   paste0(output_prefix, "_majority_vote_accuracy_summary.csv")
@@ -252,9 +177,7 @@ write.csv(
 cat("\nMajority-vote accuracy summary saved to:\n")
 cat(summary_file, "\n")
 
-############################################################
-## 8. 保存每个工具的 cluster -> majority cell type 映射表
-############################################################
+#保存cluster -> majority cell type 映射表
 
 for (tool_name in names(mv_results_list)) {
   

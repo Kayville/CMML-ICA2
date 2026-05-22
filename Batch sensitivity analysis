@@ -1,30 +1,14 @@
-############################################################
-## Batch sensitivity analysis
-## ARI(cluster, cell_type + condition)
-## ARI(cluster, cell_type + condition + batch)
-## Batch sensitivity = difference between the two
-############################################################
-
 library(mclust)
 library(dplyr)
 
-############################################################
-## 1. 设置主路径
-############################################################
-
+#输入
 base_dir <- "D:/OneDrive/Desktop/CMML ICA2/scDesign3_simulation_outputs"
 
-############################################################
-## 2. 设置当前 simulation 的输入
-############################################################
-
-## 需要你修改：当前 simulation 的 RDS 文件
 rds_file <- file.path(
   base_dir,
   "Dataset2_balanced_celltype_condition_batch_rep1_new_count_new_covariate.rds"
 )
 
-## 需要你修改：三个工具的 CSV 文件路径
 tool_files <- c(
   Tool1 = file.path(
     base_dir,
@@ -45,21 +29,9 @@ tool_files <- c(
   )
 )
 
-## 如果 CSV 里有 simulation 列，并且你只想保留某一个 simulation，就设置这里
-## 如果不需要筛选，就设为 NULL
-simulation_keep <- NULL
-
-## 例如：
-## simulation_keep <- -1
-## simulation_keep <- 1
-
-## 需要你修改：输出文件名前缀
 output_prefix <- "simulation1"
 
-############################################################
-## 3. 读取 ground truth
-############################################################
-
+# 读取 ground truth
 sce_raw <- readRDS(rds_file)
 
 meta <- as.data.frame(sce_raw$new_covariate)
@@ -67,31 +39,12 @@ meta <- as.data.frame(sce_raw$new_covariate)
 cat("new_covariate columns:\n")
 print(colnames(meta))
 
-############################################################
-## 4. 设置 ground truth 中 condition 和 batch 的列名
-############################################################
-
-## 如果你的列名不是 condition / batch，在这里改
+#设置 ground truth 中 condition 和 batch 的列名
 celltype_col <- "author_cell_type"
 condition_col <- "condition"
 batch_col <- "batch"
 
-if (!celltype_col %in% colnames(meta)) {
-  stop(paste0("metadata 中没有 ", celltype_col, " 这一列。"))
-}
-
-if (!condition_col %in% colnames(meta)) {
-  stop(paste0("metadata 中没有 ", condition_col, " 这一列。请检查 colnames(meta)。"))
-}
-
-if (!batch_col %in% colnames(meta)) {
-  stop(paste0("metadata 中没有 ", batch_col, " 这一列。请检查 colnames(meta)。"))
-}
-
-############################################################
-## 5. 构建 truth_df
-############################################################
-
+#构建 truth_df
 if ("cell" %in% colnames(meta)) {
   truth_df <- data.frame(
     cell = as.character(meta$cell),
@@ -137,10 +90,7 @@ print(table(truth_df$batch))
 cat("\nCondition by batch table:\n")
 print(table(truth_df$condition, truth_df$batch))
 
-############################################################
-## 6. 定义 Batch sensitivity 计算函数
-############################################################
-
+#定义 Batch sensitivity 计算函数
 calc_batch_sensitivity <- function(tool_name, cluster_file, truth_df, simulation_keep = NULL) {
   
   cat("\nProcessing:", tool_name, "\n")
@@ -154,30 +104,10 @@ calc_batch_sensitivity <- function(tool_name, cluster_file, truth_df, simulation
   
   if (!all(c("cell", "cluster") %in% colnames(cluster_df))) {
     stop(
-      paste0(
-        tool_name,
-        " 的 CSV 缺少 cell 或 cluster 列。当前列名是：",
-        paste(colnames(cluster_df), collapse = ", ")
+      paste0()
       )
     )
   }
-  
-  ##########################################################
-  ## 如果需要筛选 simulation
-  ##########################################################
-  
-  if (!is.null(simulation_keep)) {
-    
-    if (!"simulation" %in% colnames(cluster_df)) {
-      stop(paste0(tool_name, " 没有 simulation 列，不能筛选 simulation。"))
-    }
-    
-    cluster_df <- cluster_df[cluster_df$simulation == simulation_keep, ]
-  }
-  
-  ##########################################################
-  ## 整理 cluster 信息
-  ##########################################################
   
   cluster_df <- cluster_df[, c("cell", "cluster")]
   
@@ -193,9 +123,7 @@ calc_batch_sensitivity <- function(tool_name, cluster_file, truth_df, simulation
   
   cluster_df <- cluster_df[!duplicated(cluster_df$cell), ]
   
-  ##########################################################
-  ## 合并 ground truth 和 cluster
-  ##########################################################
+  #合并 ground truth 和 cluster
   
   merged_df <- merge(
     truth_df,
@@ -205,13 +133,10 @@ calc_batch_sensitivity <- function(tool_name, cluster_file, truth_df, simulation
   )
   
   if (nrow(merged_df) == 0) {
-    stop(paste0(tool_name, " 没有和 ground truth 匹配上的 cell。"))
+    stop(paste0())
   }
   
-  ##########################################################
-  ## 构建组合标签
-  ##########################################################
-  
+  #构建组合标签
   merged_df$celltype_condition <- paste(
     merged_df$cell_type,
     merged_df$condition,
@@ -225,10 +150,7 @@ calc_batch_sensitivity <- function(tool_name, cluster_file, truth_df, simulation
     sep = "_"
   )
   
-  ##########################################################
-  ## 计算两个 ARI
-  ##########################################################
-  
+  # 计算两个 ARI
   ari_celltype_condition <- adjustedRandIndex(
     as.factor(merged_df$cluster),
     as.factor(merged_df$celltype_condition)
@@ -241,10 +163,7 @@ calc_batch_sensitivity <- function(tool_name, cluster_file, truth_df, simulation
   
   batch_sensitivity <- ari_celltype_condition_batch - ari_celltype_condition
   
-  ##########################################################
-  ## 输出结果
-  ##########################################################
-  
+  # 输出结果
   result <- data.frame(
     tool = tool_name,
     file = basename(cluster_file),
@@ -263,10 +182,7 @@ calc_batch_sensitivity <- function(tool_name, cluster_file, truth_df, simulation
   return(result)
 }
 
-############################################################
-## 7. 对三个工具计算
-############################################################
-
+#对三个工具计算
 batch_sensitivity_results <- do.call(
   rbind,
   lapply(names(tool_files), function(tool_name) {
@@ -279,17 +195,11 @@ batch_sensitivity_results <- do.call(
   })
 )
 
-############################################################
-## 8. 显示更多有效数字
-############################################################
-
 options(digits = 15)
 
 print(batch_sensitivity_results)
 
-############################################################
-## 9. 保存结果
-############################################################
+#保存结果
 
 output_file <- file.path(
   base_dir,

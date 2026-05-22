@@ -8,12 +8,12 @@ truth_df <- data.frame(
 
 head(truth_df)
 
-#每个真实 cell type 内部，cluster vs condition 的交叉表；
-#每个真实 cell type 内部，cluster vs batch 的交叉表；
-#cluster 和 condition 的 ARI；
-#cluster 和 batch 的 ARI；
-#卡方检验 p value；
-#Cramér's V，表示关联强度。
+#Within each real cell type, cluster vs condition 
+#Within each real cell type, cluster vs batch 
+#ARI of cluster and condition
+#ARI for clusters and batches
+#Chi square test p-value
+#Cramér's V
 library(mclust)
 
 cramers_v <- function(tab) {
@@ -148,7 +148,7 @@ for (tool_name in names(driver_results)) {
   }
 }
 
-#保存成txt
+#Save as txt
 sink(file.path(base_dir, paste0("console_output_", format(Sys.time(), "%Y%m%d_%H%M%S"), ".txt")))
 
 for (tool_name in names(driver_results)) {
